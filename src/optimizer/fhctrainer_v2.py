@@ -257,69 +257,58 @@ class RHSCTrainerV2(BaseTrainer):
 
             dataloader = dataset
 
-            for i, data in enumerate(dataloader):
-                # perturbation
-                # if epoch > self.init_steps and self.include_pert:
-                #     X = data[0][0].to(self.device)
-                #     y = data[0][1].to(self.device)
-                # else:
-                X = data[0].to(self.device)
-                y = data[1].to(self.device)
+            if self.is_abnormal:
+                for i, data in enumerate(dataloader):
+                    X = data[0].to(self.device)
+                    y = data[1].to(self.device)
 
-                svdd_out = net(X)
+                    svdd_out = net(X)
 
-                # if epoch > self.init_steps and self.include_pert:
-                #     pert_in = data[1][0].to(self.device)
-                #     pert_y = data[1][1].to(self.device)
-                #     svdd_out = torch.cat((svdd_out, pert_in))
-                #     y = torch.cat((y, pert_y))
+                    abnormal_idx_list = y.type(torch.bool)
+                    normal_len = len(X[~abnormal_idx_list])
+                    abnormal_len = len(X[abnormal_idx_list])
+                    total_len = normal_len + abnormal_len
 
-                abnormal_idx_list = y.type(torch.bool)
-                normal_len = len(X[~abnormal_idx_list])
-                abnormal_len = len(X[abnormal_idx_list])
-                total_len = normal_len + abnormal_len
+                    optimizer.zero_grad()
+                    opt_r.zero_grad()
 
-                optimizer.zero_grad()
-                opt_r.zero_grad()
-
-                if self.update_c:
-                    opt_c.zero_grad()
-
-                """
-                objective
-                """
-                if self.update_c:
-                    self.c.requires_grad = True
-                num_examples_train += svdd_out.size(0)
-                # print(num_examples_train)
-                # dist = torch.sqrt(torch.sum((svdd_out - self.c) ** 2, dim=1))
-                dist = torch.sum((svdd_out - self.c) ** 2, dim=1)
-
-                self.R.requires_grad = False
-                losses = (1 - y) * ((dist - self.R) ** 2) - (y * torch.log(
-                    1 - torch.exp(-((dist - self.R) ** 2)))) + self.lamb * torch.abs(self.R)
-                loss = torch.mean(losses)
-                train_dist.update(torch.mean(dist).item(), X.size(0))
-                train_loss.update(loss.item(), X.size(0))
-
-                loss.backward()
-                optimizer.step()
-                if self.update_c:
-                    opt_c.step()
-
-                # r loss update
-                if self.is_abnormal:
                     if self.update_c:
-                        self.c.requires_grad = False
-                    self.R.requires_grad = True
-                    r_loss = ((1 - y) * ((dist.data - self.R) ** 2)) - (y * torch.log(
-                        1 - torch.exp(-((dist.data - self.R) ** 2)))) + self.lamb * torch.abs(self.R)
-                    r_loss = torch.mean(r_loss)
+                        opt_c.zero_grad()
 
-                    r_loss.backward()
-                    opt_r.step()
+                    """
+                    objective
+                    """
+                    if self.update_c:
+                        self.c.requires_grad = True
+                    num_examples_train += svdd_out.size(0)
+                    dist = torch.sum((svdd_out - self.c) ** 2, dim=1)
+
+                    self.R.requires_grad = False
+                    losses = (1 - y) * ((dist - self.R) ** 2) - (y * torch.log(
+                        1 - torch.exp(-((dist - self.R) ** 2)))) + self.lamb * torch.abs(self.R)
+                    loss = torch.mean(losses)
+                    train_dist.update(torch.mean(dist).item(), X.size(0))
+                    train_loss.update(loss.item(), X.size(0))
+
+                    loss.backward()
+                    optimizer.step()
+                    if self.update_c:
+                        opt_c.step()
+
+                    # r loss update
+                    if self.is_abnormal:
+                        if self.update_c:
+                            self.c.requires_grad = False
+                        self.R.requires_grad = True
+                        r_loss = ((1 - y) * ((dist.data - self.R) ** 2)) - (y * torch.log(
+                            1 - torch.exp(-((dist.data - self.R) ** 2)))) + self.lamb * torch.abs(self.R)
+                        r_loss = torch.mean(r_loss)
+
+                        r_loss.backward()
+                        opt_r.step()
 
             if not self.is_abnormal:
+                self.initialize_c(net, dataloader)
                 self.R.data = self.mean_radius(net, dataloader)
             """
             validation step
